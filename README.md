@@ -17,6 +17,7 @@ In addition, an **Unsupervised Machine Learning Module** extracts Recency, Frequ
 
 Comprehensive academic and engineering documentation is organized inside the [`docs/`](docs/) directory:
 - 📋 [**Work Plan & Division of Responsibilities**](docs/WORK_PLAN.md): 2-person project work breakdown (Track 1: Frontend vs. Track 2: Backend), 6-sprint roadmap, milestones, and integration protocols without hardcoded person assignments.
+- 🎓 [**Academic DBMS Rubric Compliance Guide**](docs/DBMS_RUBRIC_COMPLIANCE_GUIDE.md): Direct mapping to evaluation rubric: DDL & Constraints (2), DML (1), Queries (2), Procedures & Functions (2), Cursors & Triggers (2).
 - 🛠️ [**Database Implementation Plan & Roadmap**](docs/DATABASE_IMPLEMENTATION_PLAN.md): Phase-by-phase execution plan for PostgreSQL 3NF schema, PL/pgSQL triggers, stored procedures, Prisma ORM sync, seeders, and verification test cases.
 - 🏛️ [**System Architecture & Technical Design**](docs/ARCHITECTURE_AND_DESIGN.md): High-level topology, Mermaid flowcharts, ACID transaction sequence diagrams, and 3NF validation.
 - 🗄️ [**Database Specification & Data Dictionary**](docs/DATABASE_SPECIFICATION.md): Entity mappings, complete data dictionary, constraints, triggers (`trg_validate_and_deduct_stock`), stored procedures (`place_order`, `cancel_order`), and complex analytical SQL queries.
@@ -31,6 +32,7 @@ Comprehensive academic and engineering documentation is organized inside the [`d
 DBMS PROJECT/
 ├── docs/                       # Comprehensive Academic Documentation Suite
 │   ├── WORK_PLAN.md            # 2-Person Work Plan (Frontend vs. Backend)
+│   ├── DBMS_RUBRIC_COMPLIANCE_GUIDE.md # 100% Evaluation Rubric Mapping & Viva Script
 │   ├── DATABASE_IMPLEMENTATION_PLAN.md # DB execution plan & triggers
 │   ├── ARCHITECTURE_AND_DESIGN.md # System architecture & ACID flows
 │   ├── DATABASE_SPECIFICATION.md # Data dictionary, 3NF DDL & triggers
@@ -40,9 +42,11 @@ DBMS PROJECT/
 │   └── SETUP_AND_CONTRIBUTION_GUIDE.md # Setup runbook & viva script
 │
 ├── database/                   # Native PostgreSQL Database Assets
-│   ├── schema.sql              # 3NF DDL (8 tables with PK, FK, CHECK, UNIQUE constraints)
-│   ├── procedures_triggers.sql # PL/pgSQL triggers (stock validation, sync) & procedures
-│   └── seed.sql                # Realistic seed dataset (categories, products, orders, reviews)
+│   ├── schema.sql              # 3NF DDL (10 tables with PK, FK, CHECK, UNIQUE constraints)
+│   ├── procedures_triggers.sql # PL/pgSQL explicit cursors, triggers, procedures & functions
+│   ├── dml_operations.sql      # Meaningful INSERT, UPDATE, DELETE & cascade demonstrations
+│   ├── queries.sql             # 15 Advanced SQL queries (Joins, Aggregations, Subqueries, Windows, Sets, CTEs)
+│   └── seed.sql                # Realistic seed dataset (categories, products, carts, orders, reviews)
 │
 ├── prisma/                     # Prisma ORM Data Modeling
 │   └── schema.prisma           # Prisma schema mapped to 3NF PostgreSQL tables & relations

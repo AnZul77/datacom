@@ -7,12 +7,18 @@
 -- Database Engine: PostgreSQL 14+
 -- ============================================================================
 
--- Clean up existing routines, views and triggers
+-- Clean up existing routines, views, and triggers
 DROP TRIGGER IF EXISTS trg_validate_and_deduct_stock ON order_items CASCADE;
 DROP FUNCTION IF EXISTS fn_validate_and_deduct_stock() CASCADE;
 
 DROP TRIGGER IF EXISTS trg_update_order_total ON order_items CASCADE;
 DROP FUNCTION IF EXISTS fn_update_order_total() CASCADE;
+
+DROP TRIGGER IF EXISTS trg_prevent_unverified_review ON reviews CASCADE;
+DROP FUNCTION IF EXISTS fn_prevent_unverified_review() CASCADE;
+
+DROP TRIGGER IF EXISTS trg_update_cart_timestamp ON cart_items CASCADE;
+DROP FUNCTION IF EXISTS fn_update_cart_timestamp() CASCADE;
 
 DROP PROCEDURE IF EXISTS place_order(INT, JSONB, INT) CASCADE;
 DROP PROCEDURE IF EXISTS place_order(INT, JSONB) CASCADE;
@@ -25,18 +31,27 @@ DROP FUNCTION IF EXISTS fn_checkout_cart(INT, VARCHAR) CASCADE;
 DROP PROCEDURE IF EXISTS cancel_order(INT) CASCADE;
 DROP FUNCTION IF EXISTS fn_cancel_order(INT) CASCADE;
 
+DROP PROCEDURE IF EXISTS bulk_inventory_restock(INT, INT, INT) CASCADE;
+DROP PROCEDURE IF EXISTS apply_category_discount(INT, NUMERIC, INT) CASCADE;
+
 DROP FUNCTION IF EXISTS get_customer_total_spent(INT) CASCADE;
+DROP FUNCTION IF EXISTS calculate_customer_tier(INT) CASCADE;
+DROP FUNCTION IF EXISTS get_product_avg_rating(INT) CASCADE;
 
 DROP VIEW IF EXISTS v_category_performance CASCADE;
 DROP VIEW IF EXISTS v_customer_order_summary CASCADE;
 DROP VIEW IF EXISTS v_low_stock_alerts CASCADE;
 
 -- ============================================================================
--- 1. TRIGGER: trg_validate_and_deduct_stock
+-- 1. TRIGGERS
+-- ============================================================================
+
+-- ----------------------------------------------------------------------------
+-- Trigger 1.1: trg_validate_and_deduct_stock
 -- BEFORE INSERT ON order_items
 -- Ensures stock availability, locks product row to prevent race conditions,
 -- and automatically decrements products.stock_qty.
--- ============================================================================
+-- ----------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION fn_validate_and_deduct_stock()
 RETURNS TRIGGER AS $$
 DECLARE
@@ -74,11 +89,11 @@ BEFORE INSERT ON order_items
 FOR EACH ROW
 EXECUTE FUNCTION fn_validate_and_deduct_stock();
 
--- ============================================================================
--- 2. TRIGGER: trg_update_order_total
+-- ----------------------------------------------------------------------------
+-- Trigger 1.2: trg_update_order_total
 -- AFTER INSERT OR UPDATE OR DELETE ON order_items
 -- Automatically recalculates and updates orders.total_amount using line item sums.
--- ============================================================================
+-- ----------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION fn_update_order_total()
 RETURNS TRIGGER AS $$
 DECLARE
@@ -115,12 +130,84 @@ AFTER INSERT OR UPDATE OR DELETE ON order_items
 FOR EACH ROW
 EXECUTE FUNCTION fn_update_order_total();
 
+-- ----------------------------------------------------------------------------
+-- Trigger 1.3: trg_prevent_unverified_review
+-- BEFORE INSERT ON reviews
+-- Business Integrity Guard: Prevents review fraud by verifying that the customer
+-- has actually purchased and received the product before allowing a rating.
+-- ----------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION fn_prevent_unverified_review()
+RETURNS TRIGGER AS $$
+DECLARE
+    v_verified_purchase BOOLEAN;
+BEGIN
+    -- Check if customer has a completed non-cancelled order containing this product
+    SELECT EXISTS (
+        SELECT 1
+        FROM orders o
+        JOIN order_items oi ON o.order_id = oi.order_id
+        WHERE o.customer_id = NEW.customer_id
+          AND oi.product_id = NEW.product_id
+          AND o.status IN ('Placed', 'Shipped', 'Delivered')
+    ) INTO v_verified_purchase;
+
+    IF NOT v_verified_purchase THEN
+        RAISE EXCEPTION 'Verified Purchase Required: Customer ID % has not purchased Product ID %.',
+            NEW.customer_id, NEW.product_id;
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_prevent_unverified_review
+BEFORE INSERT ON reviews
+FOR EACH ROW
+EXECUTE FUNCTION fn_prevent_unverified_review();
+
+-- ----------------------------------------------------------------------------
+-- Trigger 1.4: trg_update_cart_timestamp
+-- AFTER INSERT OR UPDATE OR DELETE ON cart_items
+-- Synchronizes parent carts.updated_at timestamp whenever items are modified.
+-- ----------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION fn_update_cart_timestamp()
+RETURNS TRIGGER AS $$
+DECLARE
+    v_cart_id INT;
+BEGIN
+    IF TG_OP = 'DELETE' THEN
+        v_cart_id := OLD.cart_id;
+    ELSE
+        v_cart_id := NEW.cart_id;
+    END IF;
+
+    UPDATE carts
+    SET updated_at = CURRENT_TIMESTAMP
+    WHERE cart_id = v_cart_id;
+
+    IF TG_OP = 'DELETE' THEN
+        RETURN OLD;
+    ELSE
+        RETURN NEW;
+    END IF;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_update_cart_timestamp
+AFTER INSERT OR UPDATE OR DELETE ON cart_items
+FOR EACH ROW
+EXECUTE FUNCTION fn_update_cart_timestamp();
+
 -- ============================================================================
--- 3. STORED PROCEDURE: place_order(p_customer_id, p_items JSONB, INOUT p_order_id)
+-- 2. PROCEDURES (Business Operations & Transactions)
+-- ============================================================================
+
+-- ----------------------------------------------------------------------------
+-- Procedure 2.1: place_order(p_customer_id, p_items JSONB, INOUT p_order_id)
 -- Atomically creates an order record, iterates through array of product IDs
 -- and quantities, inserts order items, and returns the generated order_id.
--- Trigger 1 (stock deduction) and Trigger 2 (total amount) fire automatically.
--- ============================================================================
+-- Triggers 1.1 & 1.2 fire automatically to validate stock and compute totals.
+-- ----------------------------------------------------------------------------
 CREATE OR REPLACE PROCEDURE place_order(
     IN p_customer_id INT,
     IN p_items       JSONB,
@@ -179,28 +266,21 @@ BEGIN
 END;
 $$;
 
--- Stored Function wrapper for place_order
-CREATE OR REPLACE FUNCTION fn_place_order(
-    p_customer_id INT,
-    p_items       JSONB
-)
-RETURNS INT
-LANGUAGE plpgsql
-AS $$
-DECLARE
-    v_order_id INT;
+CREATE OR REPLACE FUNCTION fn_place_order(p_customer_id INT, p_items JSONB)
+RETURNS INT LANGUAGE plpgsql AS $$
+DECLARE v_order_id INT;
 BEGIN
     CALL place_order(p_customer_id, p_items, v_order_id);
     RETURN v_order_id;
 END;
 $$;
 
--- ============================================================================
--- 4. STORED PROCEDURE: checkout_cart(p_customer_id, p_payment_method, INOUT p_order_id)
+-- ----------------------------------------------------------------------------
+-- Procedure 2.2: checkout_cart(p_customer_id, p_payment_method, INOUT p_order_id)
 -- Atomically transitions active cart items (carts + cart_items) into an
 -- immutable order ledger (orders + order_items + payments), verifies stock,
 -- and clears the cart.
--- ============================================================================
+-- ----------------------------------------------------------------------------
 CREATE OR REPLACE PROCEDURE checkout_cart(
     IN p_customer_id       INT,
     IN p_payment_method    VARCHAR(30) DEFAULT 'Credit Card',
@@ -249,7 +329,6 @@ BEGIN
         JOIN products p ON ci.product_id = p.product_id
         WHERE ci.cart_id = v_cart_id
     LOOP
-        -- Inserting into order_items invokes trg_validate_and_deduct_stock
         INSERT INTO order_items (order_id, product_id, quantity, unit_price)
         VALUES (p_order_id, v_item.product_id, v_item.quantity, v_item.price);
     END LOOP;
@@ -271,27 +350,23 @@ BEGIN
 END;
 $$;
 
--- Stored Function wrapper for checkout_cart
 CREATE OR REPLACE FUNCTION fn_checkout_cart(
     p_customer_id    INT,
     p_payment_method VARCHAR(30) DEFAULT 'Credit Card'
 )
-RETURNS INT
-LANGUAGE plpgsql
-AS $$
-DECLARE
-    v_order_id INT;
+RETURNS INT LANGUAGE plpgsql AS $$
+DECLARE v_order_id INT;
 BEGIN
     CALL checkout_cart(p_customer_id, p_payment_method, v_order_id);
     RETURN v_order_id;
 END;
 $$;
 
--- ============================================================================
--- 5. STORED PROCEDURE: cancel_order(p_order_id)
+-- ----------------------------------------------------------------------------
+-- Procedure 2.3: cancel_order(p_order_id)
 -- Marks order status as 'Cancelled', restores stock_qty for all line items,
 -- and handles payment status transition (Completed -> Refunded, Pending -> Failed).
--- ============================================================================
+-- ----------------------------------------------------------------------------
 CREATE OR REPLACE PROCEDURE cancel_order(
     IN p_order_id INT
 )
@@ -348,11 +423,8 @@ BEGIN
 END;
 $$;
 
--- Function wrapper for cancel_order
 CREATE OR REPLACE FUNCTION fn_cancel_order(p_order_id INT)
-RETURNS BOOLEAN
-LANGUAGE plpgsql
-AS $$
+RETURNS BOOLEAN LANGUAGE plpgsql AS $$
 BEGIN
     CALL cancel_order(p_order_id);
     RETURN TRUE;
@@ -360,10 +432,127 @@ END;
 $$;
 
 -- ============================================================================
--- 6. STORED FUNCTION: get_customer_total_spent(p_customer_id)
--- Calculates and returns total aggregate lifetime spend of a customer across
--- non-cancelled orders.
+-- 3. CURSORS (Explicit Implementation for Rubric Compliance)
 -- ============================================================================
+
+-- ----------------------------------------------------------------------------
+-- Cursor Procedure 3.1: bulk_inventory_restock
+-- Demonstrates an EXPLICIT CURSOR with ROW LOCKING and WHERE CURRENT OF.
+-- Iterates through products with inventory below threshold and restocks them.
+-- ----------------------------------------------------------------------------
+CREATE OR REPLACE PROCEDURE bulk_inventory_restock(
+    IN p_threshold       INT,
+    IN p_restock_amount  INT,
+    INOUT p_restocked_count INT DEFAULT 0
+)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    -- Explicit cursor definition with FOR UPDATE row locking
+    cur_low_stock CURSOR FOR
+        SELECT product_id, product_name, stock_qty
+        FROM products
+        WHERE stock_qty <= p_threshold
+        FOR UPDATE;
+
+    v_prod_id       INT;
+    v_prod_name     VARCHAR(150);
+    v_current_stock INT;
+BEGIN
+    IF p_threshold < 0 OR p_restock_amount <= 0 THEN
+        RAISE EXCEPTION 'Threshold must be >= 0 and restock amount must be > 0.';
+    END IF;
+
+    p_restocked_count := 0;
+
+    -- 1. Open the explicit cursor
+    OPEN cur_low_stock;
+
+    -- 2. Loop and fetch rows one by one
+    LOOP
+        FETCH cur_low_stock INTO v_prod_id, v_prod_name, v_current_stock;
+        EXIT WHEN NOT FOUND;
+
+        -- 3. Perform cursor-based positional update
+        UPDATE products
+        SET stock_qty = stock_qty + p_restock_amount
+        WHERE CURRENT OF cur_low_stock;
+
+        p_restocked_count := p_restocked_count + 1;
+        RAISE NOTICE 'Cursor Restocked: % (ID: %) from % to % units',
+            v_prod_name, v_prod_id, v_current_stock, v_current_stock + p_restock_amount;
+    END LOOP;
+
+    -- 4. Close the explicit cursor
+    CLOSE cur_low_stock;
+END;
+$$;
+
+-- ----------------------------------------------------------------------------
+-- Cursor Procedure 3.2: apply_category_discount
+-- Demonstrates a PARAMETERIZED EXPLICIT CURSOR.
+-- Applies a promotional discount percentage to all products in a category.
+-- ----------------------------------------------------------------------------
+CREATE OR REPLACE PROCEDURE apply_category_discount(
+    IN p_category_id      INT,
+    IN p_discount_pct     NUMERIC,
+    INOUT p_updated_count INT DEFAULT 0
+)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    -- Parameterized explicit cursor
+    cur_cat_products CURSOR(p_cat INT) FOR
+        SELECT product_id, product_name, price
+        FROM products
+        WHERE category_id = p_cat
+        FOR UPDATE;
+
+    v_prod_id   INT;
+    v_prod_name VARCHAR(150);
+    v_old_price NUMERIC(10, 2);
+    v_new_price NUMERIC(10, 2);
+BEGIN
+    IF p_discount_pct <= 0 OR p_discount_pct >= 100 THEN
+        RAISE EXCEPTION 'Discount percentage must be strictly between 0 and 100.';
+    END IF;
+
+    IF NOT EXISTS (SELECT 1 FROM categories WHERE category_id = p_category_id) THEN
+        RAISE EXCEPTION 'Category ID % does not exist.', p_category_id;
+    END IF;
+
+    p_updated_count := 0;
+
+    -- Open parameterized cursor passing category_id
+    OPEN cur_cat_products(p_category_id);
+
+    LOOP
+        FETCH cur_cat_products INTO v_prod_id, v_prod_name, v_old_price;
+        EXIT WHEN NOT FOUND;
+
+        v_new_price := ROUND(v_old_price * (1.0 - (p_discount_pct / 100.0)), 2);
+
+        UPDATE products
+        SET price = v_new_price
+        WHERE CURRENT OF cur_cat_products;
+
+        p_updated_count := p_updated_count + 1;
+        RAISE NOTICE 'Cursor Discount Applied: % (ID: %) price changed from % to %',
+            v_prod_name, v_prod_id, v_old_price, v_new_price;
+    END LOOP;
+
+    CLOSE cur_cat_products;
+END;
+$$;
+
+-- ============================================================================
+-- 4. FUNCTIONS (Business Logic & Calculations)
+-- ============================================================================
+
+-- ----------------------------------------------------------------------------
+-- Function 4.1: get_customer_total_spent(p_customer_id)
+-- Returns aggregate lifetime spend of a customer excluding cancelled orders.
+-- ----------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION get_customer_total_spent(
     p_customer_id INT
 )
@@ -383,11 +572,63 @@ BEGIN
 END;
 $$;
 
+-- ----------------------------------------------------------------------------
+-- Function 4.2: calculate_customer_tier(p_customer_id)
+-- Evaluates loyalty tier (PLATINUM, GOLD, SILVER, BRONZE) based on spend.
+-- ----------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION calculate_customer_tier(
+    p_customer_id INT
+)
+RETURNS VARCHAR(20)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_spend NUMERIC(12, 2);
+    v_tier  VARCHAR(20);
+BEGIN
+    v_spend := get_customer_total_spent(p_customer_id);
+
+    IF v_spend >= 500.00 THEN
+        v_tier := 'PLATINUM';
+    ELSIF v_spend >= 250.00 THEN
+        v_tier := 'GOLD';
+    ELSIF v_spend >= 100.00 THEN
+        v_tier := 'SILVER';
+    ELSE
+        v_tier := 'BRONZE';
+    END IF;
+
+    RETURN v_tier;
+END;
+$$;
+
+-- ----------------------------------------------------------------------------
+-- Function 4.3: get_product_avg_rating(p_product_id)
+-- Returns average rating rounded to 2 decimal places.
+-- ----------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION get_product_avg_rating(
+    p_product_id INT
+)
+RETURNS NUMERIC(3, 2)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_avg NUMERIC(3, 2);
+BEGIN
+    SELECT ROUND(AVG(rating)::NUMERIC, 2)
+    INTO v_avg
+    FROM reviews
+    WHERE product_id = p_product_id;
+
+    RETURN COALESCE(v_avg, 0.00);
+END;
+$$;
+
 -- ============================================================================
--- 7. DATABASE VIEWS (Analytical Reporting)
+-- 5. DATABASE VIEWS (Analytical & Aggregated Reporting)
 -- ============================================================================
 
--- View 1: Category Sales & Revenue Performance Leaderboard
+-- View 5.1: Category Performance Leaderboard
 CREATE OR REPLACE VIEW v_category_performance AS
 SELECT 
     c.category_id,
@@ -402,7 +643,7 @@ LEFT JOIN order_items oi ON p.product_id = oi.product_id
 LEFT JOIN orders o ON oi.order_id = o.order_id AND o.status != 'Cancelled'
 GROUP BY c.category_id, c.category_name;
 
--- View 2: Customer Order Summary & Spend Metrics
+-- View 5.2: Customer Order Summary & Spend Metrics
 CREATE OR REPLACE VIEW v_customer_order_summary AS
 SELECT 
     c.customer_id,
@@ -416,7 +657,7 @@ FROM customers c
 LEFT JOIN orders o ON c.customer_id = o.customer_id
 GROUP BY c.customer_id, c.customer_name, c.email, c.city;
 
--- View 3: Low Inventory Stock Warning System
+-- View 5.3: Low Inventory Stock Warning System
 CREATE OR REPLACE VIEW v_low_stock_alerts AS
 SELECT 
     p.product_id,

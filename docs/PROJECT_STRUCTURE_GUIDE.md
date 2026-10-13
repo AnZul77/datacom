@@ -19,8 +19,10 @@ DBMS PROJECT/
 ├── README.md                          # Shared: Academic Capstone Project Report & Overview
 │
 ├── database/                          # [Track 2: Backend] Native PostgreSQL Database Engine Assets
-│   ├── schema.sql                     # Complete 3NF DDL (8 core tables, constraints, indexes)
-│   ├── procedures_triggers.sql        # PL/pgSQL triggers (stock deduction, totals) & stored procedures
+│   ├── schema.sql                     # Complete 3NF DDL (10 tables, constraints, indexes)
+│   ├── procedures_triggers.sql        # PL/pgSQL explicit cursors, triggers, procedures & functions
+│   ├── dml_operations.sql             # Meaningful INSERT, UPDATE, DELETE & cascade demonstrations
+│   ├── queries.sql                    # 15 Advanced analytical SQL queries (Joins, Subqueries, Windows)
 │   └── seed.sql                       # Comprehensive synthetic test dataset
 │
 ├── prisma/                            # [Track 2: Backend] Prisma ORM Schema & Client Mappings
@@ -68,6 +70,8 @@ DBMS PROJECT/
 │
 └── docs/                              # [Shared] Project Documentation & Academic Specifications
     ├── WORK_PLAN.md                   # Full sprint work plan & Track 1/Track 2 division
+    ├── DBMS_RUBRIC_COMPLIANCE_GUIDE.md# 100% Evaluation Rubric Mapping & Viva Script
+    ├── DATABASE_IMPLEMENTATION_PLAN.md# DB execution plan, triggers & test suite
     ├── ARCHITECTURE_AND_DESIGN.md     # Architecture, ACID transaction flows & Mermaid diagrams
     ├── DATABASE_SPECIFICATION.md      # Data dictionary, ER mapping, 3NF DDL, and triggers
     ├── API_SPECIFICATION.md           # Exhaustive REST API contract with request/response schemas

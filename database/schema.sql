@@ -1,13 +1,3 @@
--- ============================================================================
--- E-COMMERCE DATABASE MANAGEMENT SYSTEM (PostgreSQL DDL)
--- Academic DBMS Project
--- Students / Authors:
---   - Nisha Rathi (24BYB0137)
---   - Anshul Gupta (24BYB0149)
--- Database Engine: PostgreSQL 14+ / Strictly Compliant with Third Normal Form (3NF)
--- ============================================================================
-
--- Drop tables in reverse-dependency order to support clean idempotent executions
 DROP TABLE IF EXISTS customer_segments CASCADE;
 DROP TABLE IF EXISTS reviews CASCADE;
 DROP TABLE IF EXISTS payments CASCADE;
@@ -19,10 +9,6 @@ DROP TABLE IF EXISTS products CASCADE;
 DROP TABLE IF EXISTS categories CASCADE;
 DROP TABLE IF EXISTS customers CASCADE;
 
--- ============================================================================
--- 1. CATEGORIES TABLE
--- Entity representing product taxonomy (normalized to 1NF, 2NF & 3NF)
--- ============================================================================
 CREATE TABLE categories (
     category_id     SERIAL PRIMARY KEY,
     category_name   VARCHAR(100) NOT NULL UNIQUE,
@@ -30,10 +16,6 @@ CREATE TABLE categories (
     created_at      TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
--- ============================================================================
--- 2. PRODUCTS TABLE
--- Catalog of inventory items with price, current stock, and category reference
--- ============================================================================
 CREATE TABLE products (
     product_id      SERIAL PRIMARY KEY,
     product_name    VARCHAR(150) NOT NULL,
@@ -55,10 +37,6 @@ CREATE TABLE products (
 CREATE INDEX idx_products_category ON products(category_id);
 CREATE INDEX idx_products_name ON products(product_name);
 
--- ============================================================================
--- 3. CUSTOMERS TABLE
--- Stores demographic, contact, and registration details of shoppers
--- ============================================================================
 CREATE TABLE customers (
     customer_id     SERIAL PRIMARY KEY,
     customer_name   VARCHAR(100) NOT NULL,
@@ -71,10 +49,6 @@ CREATE TABLE customers (
 CREATE INDEX idx_customers_city ON customers(city);
 CREATE INDEX idx_customers_email ON customers(email);
 
--- ============================================================================
--- 4. CARTS TABLE
--- Maintains the active persistent shopping session per customer (1:1 relation)
--- ============================================================================
 CREATE TABLE carts (
     cart_id         SERIAL PRIMARY KEY,
     customer_id     INT NOT NULL UNIQUE,
@@ -88,10 +62,6 @@ CREATE TABLE carts (
 
 CREATE INDEX idx_carts_customer ON carts(customer_id);
 
--- ============================================================================
--- 5. CART_ITEMS TABLE
--- Associative table resolving M:N relationship between Cart and Product
--- ============================================================================
 CREATE TABLE cart_items (
     cart_item_id    SERIAL PRIMARY KEY,
     cart_id         INT NOT NULL,
@@ -116,10 +86,6 @@ CREATE TABLE cart_items (
 CREATE INDEX idx_cart_items_cart ON cart_items(cart_id);
 CREATE INDEX idx_cart_items_product ON cart_items(product_id);
 
--- ============================================================================
--- 6. ORDERS TABLE
--- High-level purchase master records with status tracking and running total
--- ============================================================================
 CREATE TABLE orders (
     order_id        SERIAL PRIMARY KEY,
     customer_id     INT NOT NULL,
@@ -141,11 +107,6 @@ CREATE INDEX idx_orders_customer ON orders(customer_id);
 CREATE INDEX idx_orders_date ON orders(order_date);
 CREATE INDEX idx_orders_status ON orders(status);
 
--- ============================================================================
--- 7. ORDER_ITEMS TABLE
--- Normalized line items linking products to orders; enforces composite uniqueness
--- and captures point-in-time unit pricing snapshot.
--- ============================================================================
 CREATE TABLE order_items (
     order_item_id   SERIAL PRIMARY KEY,
     order_id        INT NOT NULL,
@@ -173,10 +134,6 @@ CREATE TABLE order_items (
 CREATE INDEX idx_order_items_order ON order_items(order_id);
 CREATE INDEX idx_order_items_product ON order_items(product_id);
 
--- ============================================================================
--- 8. PAYMENTS TABLE
--- 1-to-1 payment transaction linked to each order with payment lifecycle state
--- ============================================================================
 CREATE TABLE payments (
     payment_id      SERIAL PRIMARY KEY,
     order_id        INT NOT NULL UNIQUE,
@@ -200,10 +157,6 @@ CREATE TABLE payments (
 CREATE INDEX idx_payments_order ON payments(order_id);
 CREATE INDEX idx_payments_status ON payments(payment_status);
 
--- ============================================================================
--- 9. REVIEWS TABLE
--- Customer feedback on purchased items; 1 review per customer-product pair
--- ============================================================================
 CREATE TABLE reviews (
     review_id       SERIAL PRIMARY KEY,
     customer_id     INT NOT NULL,
@@ -230,10 +183,6 @@ CREATE TABLE reviews (
 CREATE INDEX idx_reviews_product ON reviews(product_id);
 CREATE INDEX idx_reviews_customer ON reviews(customer_id);
 
--- ============================================================================
--- 10. CUSTOMER_SEGMENTS TABLE
--- Analytics segmentation store (Recency, Frequency, Monetary + Cluster label)
--- ============================================================================
 CREATE TABLE customer_segments (
     customer_id     INT PRIMARY KEY,
     recency_days    INT NOT NULL,
